@@ -19,10 +19,5 @@ Open-CV image processing demos.
 **OpenCV**  
 https://opencv.org/
 
----
 
-### OpenCV Attribution
-OpenCV® is a registered trademark of Open Source Computer Vision Library.
-Used according to the OpenCV media kit guidelines:
-https://opencv.org/media-kit/
 
