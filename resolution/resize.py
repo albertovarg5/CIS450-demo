@@ -17,11 +17,14 @@ def main():
     out_dir = "resolution"
     os.makedirs(out_dir, exist_ok=True)
 
-    # Grab common image types (you have .jpeg)
+    # Grab common image types
     patterns = ["*.jpg", "*.jpeg", "*.png", "*.JPG", "*.JPEG", "*.PNG"]
     files = []
     for p in patterns:
         files.extend(glob.glob(os.path.join(photos_dir, p)))
+
+    # ✅ REMOVE DUPLICATES (THIS IS THE ONLY CHANGE)
+    files = sorted(set(files))
 
     if not files:
         print(f"No images found in {photos_dir}/")
@@ -51,3 +54,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
