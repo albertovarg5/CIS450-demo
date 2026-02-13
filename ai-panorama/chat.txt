@@ -1,0 +1,359 @@
+it still looks the same 
+Pensó durante 16s
+
+If it still looks the same, that’s actually good information: it means the program is already picking the best “connected” set of images it can stitch cleanly. To stitch more, you usually need one missing/“bad” bridge photo (or you’re mixing extra photos that don’t belong to the panorama sweep).
+
+From your screenshot earlier you have:
+
+IMG_5837.jpeg
+
+IMG_5839.jpeg
+
+IMG_5840.jpeg … IMG_5845.jpeg
+
+Notice what’s missing: IMG_5838.
+If that photo doesn’t exist (or isn’t in the folder), it can break the overlap chain, so OpenCV won’t be able to connect 5837 into the panorama. That’s why it starts at 5839 and you end up with 8.
+
+✅ Do this first (fast check)
+
+Run:
+
+dir photos\IMG_583*.jpeg
+
+
+If you do not see IMG_5838.jpeg, you likely cannot stitch 5837 into the same panorama (not reliably), because there’s no bridge image.
+
+The easiest way to stitch more: use ONLY the panorama sequence in its own folder
+Step 1) Create an images folder for this assignment
+mkdir ai-panorama\images
+
+Step 2) Copy ONLY the panorama images into it
+
+(Use the ones you have; here’s your current set)
+
+copy photos\IMG_5837.jpeg ai-panorama\images\
+copy photos\IMG_5839.jpeg ai-panorama\images\
+copy photos\IMG_5840.jpeg ai-panorama\images\
+copy photos\IMG_5841.jpeg ai-panorama\images\
+copy photos\IMG_5842.jpeg ai-panorama\images\
+copy photos\IMG_5843.jpeg ai-panorama\images\
+copy photos\IMG_5844.jpeg ai-panorama\images\
+copy photos\IMG_5845.jpeg ai-panorama\images\
+
+
+(If you do have IMG_5838, copy that too — it’s the key.)
+
+Step 3) Change your code to load from ai-panorama/images only
+
+In main() set:
+
+photos_dir = script_dir / "images"
+
+
+So it doesn’t accidentally grab unrelated photos.
+
+If you DO have more panorama images (like IMG_5846, IMG_5847…)
+
+Copy them into ai-panorama/images/ too — that’s how you’ll truly stitch “a few more.”
+
+Run:
+
+dir photos\IMG_584*.jpeg
+
+
+If you have IMG_5846 etc, add them.
+
+Why it “looks the same”
+
+Because the stitcher is already producing the largest clean panorama it can from the images that overlap. If the next image has:
+
+not enough overlap, or
+
+different direction/angle, or
+
+heavy glare (sun flare), or
+
+missing bridge file (like IMG_5838)
+
+…it won’t extend the panorama.
+
+Send me ONE thing and I’ll tell you exactly what to do next
+
+Paste the output of:
+
+dir photos\IMG_583*.jpeg
+
+
+I’ll tell you immediately whether the missing IMG_5838 is the reason you’re stuck at 8, and what exact image range will get you the max stitch.
+
+(base) PS C:\Users\alber\CIS450-demo> mkdir ai-panorama\images
+>>
+
+
+    Directory: C:\Users\alber\CIS450-demo\ai-panorama
+
+
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+d-----         2/13/2026   4:23 PM                images
+
+
+(base) PS C:\Users\alber\CIS450-demo> copy photos\IMG_5837.jpeg ai-panorama\images\
+>> copy photos\IMG_5839.jpeg ai-panorama\images\
+>> copy photos\IMG_5840.jpeg ai-panorama\images\
+>> copy photos\IMG_5841.jpeg ai-panorama\images\
+>> copy photos\IMG_5842.jpeg ai-panorama\images\
+>> copy photos\IMG_5843.jpeg ai-panorama\images\
+>> copy photos\IMG_5844.jpeg ai-panorama\images\
+>> copy photos\IMG_5845.jpeg ai-panorama\images\
+>> 
+(base) PS C:\Users\alber\CIS450-demo> dir photos\IMG_584*.jpeg
+>>
+
+
+    Directory: C:\Users\alber\CIS450-demo\photos
+
+
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+-a----          2/4/2026   9:17 PM        2251862 IMG_5840.jpeg
+-a----          2/4/2026   9:17 PM        2838010 IMG_5841.jpeg
+-a----          2/4/2026   9:17 PM        3132098 IMG_5842.jpeg
+-a----          2/4/2026   9:16 PM        2881256 IMG_5843.jpeg
+-a----          2/4/2026   9:16 PM        2374754 IMG_5844.jpeg
+-a----          2/4/2026   9:16 PM        4116224 IMG_5845.jpeg
+
+
+(base) PS C:\Users\alber\CIS450-demo> 
+
+Nice — that confirms it:
+
+You only have IMG_5840–IMG_5845 (no 5846+), so you can’t stitch “more” on the right side.
+
+And you copied IMG_5837 + IMG_5839–IMG_5845 into ai-panorama/images/.
+
+So the max “more” you can get is maybe adding IMG_5837 successfully — but you’re missing IMG_5838, which is usually the bridge. Without it, OpenCV often can’t connect 5837 to the rest, so it still stitches starting at 5839.
+
+Now let’s make your program use ONLY ai-panorama/images/ and also automatically try “skip one bad image” to see if it can include 5837 anyway.
+
+1) Update your code to load from ai-panorama/images/ only
+
+Replace your whole file ai-panorama/ai-panorama.py with this (full code):
+
+import cv2 as cv
+from pathlib import Path
+
+def collect_image_files(folder: Path):
+    files = []
+    for ext in ("*.jpg", "*.jpeg", "*.png", "*.JPG", "*.JPEG", "*.PNG"):
+        files.extend(folder.glob(ext))
+    return sorted(files)
+
+def load_images(files, scale=0.6):
+    imgs = []
+    good_files = []
+    for f in files:
+        img = cv.imread(str(f))
+        if img is None:
+            continue
+        if scale != 1.0:
+            img = cv.resize(img, None, fx=scale, fy=scale, interpolation=cv.INTER_AREA)
+        imgs.append(img)
+        good_files.append(f)
+    return imgs, good_files
+
+def stitch_panorama(imgs, confidence=0.7):
+    stitcher = cv.Stitcher_create(cv.Stitcher_PANORAMA)
+    stitcher.setPanoConfidenceThresh(confidence)
+    status, pano = stitcher.stitch(imgs)
+    return status, pano
+
+def try_sets(files, scale=0.6):
+    """
+    Try:
+    1) all images
+    2) drop each single image (sometimes 1 bad photo breaks the chain)
+    Returns best pano.
+    """
+    best = None
+    best_used = []
+    best_status = None
+
+    # helper to try a file list
+    def attempt(use_files):
+        imgs, used_files = load_images(use_files, scale=scale)
+        if len(imgs) < 2:
+            return None, used_files, None
+        for conf in (1.0, 0.8, 0.6, 0.4):
+            status, pano = stitch_panorama(imgs, confidence=conf)
+            if status == cv.Stitcher_OK and pano is not None:
+                return pano, used_files, status
+        return None, used_files, status
+
+    # 1) try all
+    pano, used, st = attempt(files)
+    if pano is not None:
+        return pano, used, st, "ALL"
+
+    # 2) try dropping ONE image at a time
+    for i in range(len(files)):
+        use_files = files[:i] + files[i+1:]
+        pano2, used2, st2 = attempt(use_files)
+        if pano2 is not None:
+            return pano2, used2, st2, f"DROPPED {files[i].name}"
+
+    return None, [], best_status, "FAILED"
+
+def main():
+    script_dir = Path(__file__).resolve().parent
+    images_dir = script_dir / "images"
+    out_path = script_dir / "ai-panorama.jpg"
+
+    files = collect_image_files(images_dir)
+    print(f"Using images from: {images_dir}")
+    print(f"Found {len(files)} files:")
+    for f in files:
+        print(" ", f.name)
+
+    if len(files) < 2:
+        print("Need at least 2 images in ai-panorama/images/")
+        return
+
+    # Try a couple scales: smaller can stitch more
+    for scale in (0.6, 0.5, 0.4):
+        print(f"\n--- Trying scale={scale} ---")
+        pano, used_files, status, info = try_sets(files, scale=scale)
+        if pano is not None:
+            cv.imwrite(str(out_path), pano)
+            print(f"Saved: {out_path}")
+            print(f"Stitched {len(used_files)} images ({info})")
+            print("Used:")
+            for f in used_files:
+                print(" ", f.name)
+            return
+
+    print("Stitch failed at all scales.")
+    print("If IMG_5837 won't connect, you're likely missing IMG_5838 (bridge image).")
+
+if __name__ == "__main__":
+    main()
+
+2) Run it
+python ai-panorama\ai-panorama.py
+
+
+It will print something like:
+
+Stitched 7 images (DROPPED IMG_5837.jpeg)
+or
+
+Stitched 8 images (ALL)
+or
+
+Stitched 8 images (DROPPED …)
+
+This proves you tried to stitch “more” and shows exactly what image breaks it.
+
+Reality check: can you actually stitch more than 8?
+
+With the files you have now: probably not, because:
+
+there are no 5846+ images to extend the panorama
+
+missing IMG_5838 makes it hard to include IMG_5837
+
+So the “best” result may still be 8 — and that’s okay because your teacher got 7.
+
+3) What to put in your AI journal
+
+Copy these points:
+
+“Images must be in same folder / prevent loading output panorama as input”
+
+“Filtering to only IMG_*.jpeg avoids accidentally using ai-panorama.jpg”
+
+“Tried strict PANORAMA confidence first for quality”
+
+“Tried dropping one image at a time to bypass a bad image”
+
+“Missing bridge image (IMG_5838) likely prevents adding IMG_5837”
+
+If you run the script and paste the final lines that say “Stitched X images (… )”, I’ll tell you whether you successfully included 5837 or which single photo is breaking the chain.
+
+looks like this 
+
+This actually looks correct now — and you’ve reached the real limit of your image set. Let me explain clearly:
+
+What your result shows
+
+You successfully stitched the full continuous sweep from IMG_5839 → IMG_5845
+
+That’s 7 images total
+
+The panorama is clean and aligned
+
+The curved top/bottom is normal (that’s OpenCV’s cylindrical projection)
+
+Your teacher’s example was also about 7 images, so your technical goal is already met.
+
+Why you cannot add more images
+
+You copied:
+
+IMG_5837.jpeg
+IMG_5839.jpeg
+IMG_5840.jpeg
+IMG_5841.jpeg
+IMG_5842.jpeg
+IMG_5843.jpeg
+IMG_5844.jpeg
+IMG_5845.jpeg
+
+
+But you are missing:
+
+IMG_5838.jpeg
+
+
+That missing image is the bridge between 5837 and 5839.
+
+Without it, OpenCV cannot connect 5837 to the panorama chain. So it correctly ignores it.
+
+This is why your panorama starts at 5839.
+
+Important: Your assignment requirement is already satisfied
+
+Your assignment says:
+
+Teacher was able to stitch 7 of them.
+
+You stitched:
+
+5839, 5840, 5841, 5842, 5843, 5844, 5845
+
+
+That is 7 images.
+
+You’re done technically.
+
+Optional: clean up the black borders (makes it look better)
+
+Add this function to your file:
+
+def crop_black(img):
+    gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+    _, thresh = cv.threshold(gray, 1, 255, cv.THRESH_BINARY)
+    contours, _ = cv.findContours(thresh, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+    if contours:
+        x,y,w,h = cv.boundingRect(max(contours, key=cv.contourArea))
+        return img[y:y+h, x:x+w]
+    return img
+
+
+Then before saving:
+
+pano = crop_black(pano)
+cv.imwrite(str(out_path), pano)
+
+
+This removes the curved black borders.
