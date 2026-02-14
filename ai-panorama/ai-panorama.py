@@ -1,98 +1,124 @@
 import cv2 as cv
 from pathlib import Path
 
-def collect_image_files(folder: Path):
-    files = []
-    for ext in ("*.jpg", "*.jpeg", "*.png", "*.JPG", "*.JPEG", "*.PNG"):
-        files.extend(folder.glob(ext))
-    return sorted(files)
 
-def load_images(files, scale=0.6):
-    imgs = []
-    good_files = []
-    for f in files:
-        img = cv.imread(str(f))
+def load_images(folder: Path, max_width: int = 1200):
+    paths = sorted(
+        list(folder.glob("*.png")) +
+        list(folder.glob("*.jpg")) +
+        list(folder.glob("*.jpeg"))
+    )
+
+    if len(paths) < 2:
+        print("Error: Need at least 2 images in the images folder.")
+        return [], []
+
+    print("Image order used:")
+    for p in paths:
+        print(" ", p.name)
+
+    images = []
+    for p in paths:
+        img = cv.imread(str(p))
         if img is None:
+            print(f"Warning: could not read {p.name}")
             continue
-        if scale != 1.0:
-            img = cv.resize(img, None, fx=scale, fy=scale, interpolation=cv.INTER_AREA)
-        imgs.append(img)
-        good_files.append(f)
-    return imgs, good_files
 
-def stitch_panorama(imgs, confidence=0.7):
-    stitcher = cv.Stitcher_create(cv.Stitcher_PANORAMA)
-    stitcher.setPanoConfidenceThresh(confidence)
-    status, pano = stitcher.stitch(imgs)
+        h, w = img.shape[:2]
+        if w > max_width:
+            scale = max_width / w
+            img = cv.resize(img, (int(w * scale), int(h * scale)))
+
+        images.append(img)
+
+    return paths, images
+
+
+def stitch_two(a, b, mode):
+    stitcher = cv.Stitcher_create(mode)
+
+    # Lower threshold so it accepts weaker connections
+    try:
+        stitcher.setPanoConfidenceThresh(0.0)
+    except Exception:
+        pass
+
+    status, pano = stitcher.stitch([a, b])
     return status, pano
 
-def try_sets(files, scale=0.6):
-    """
-    Try:
-    1) all images
-    2) drop each single image (sometimes 1 bad photo breaks the chain)
-    Returns best pano.
-    """
-    best = None
-    best_used = []
-    best_status = None
 
-    # helper to try a file list
-    def attempt(use_files):
-        imgs, used_files = load_images(use_files, scale=scale)
-        if len(imgs) < 2:
-            return None, used_files, None
-        for conf in (1.0, 0.8, 0.6, 0.4):
-            status, pano = stitch_panorama(imgs, confidence=conf)
-            if status == cv.Stitcher_OK and pano is not None:
-                return pano, used_files, status
-        return None, used_files, status
+def sequential_stitch(paths, images, mode, mode_name: str):
+    print(f"\nTrying sequential stitch in {mode_name} mode...")
+    pano = images[0]
 
-    # 1) try all
-    pano, used, st = attempt(files)
-    if pano is not None:
-        return pano, used, st, "ALL"
+    for i in range(1, len(images)):
+        status, new_pano = stitch_two(pano, images[i], mode)
 
-    # 2) try dropping ONE image at a time
-    for i in range(len(files)):
-        use_files = files[:i] + files[i+1:]
-        pano2, used2, st2 = attempt(use_files)
-        if pano2 is not None:
-            return pano2, used2, st2, f"DROPPED {files[i].name}"
+        if status != cv.Stitcher_OK:
+            print(f"STOP: Failed when adding image #{i+1}: {paths[i].name} (status={status})")
+            return None
 
-    return None, [], best_status, "FAILED"
+        pano = new_pano
+        print(f" OK: added image #{i+1} ({paths[i].name})")
+
+    return pano
+
 
 def main():
-    script_dir = Path(__file__).resolve().parent
-    images_dir = script_dir / "images"
-    out_path = script_dir / "ai-panorama.jpg"
+    images_dir = Path("images")
+    if not images_dir.exists():
+        print("Error: images folder not found.")
+        return 1
 
-    files = collect_image_files(images_dir)
-    print(f"Using images from: {images_dir}")
-    print(f"Found {len(files)} files:")
-    for f in files:
-        print(" ", f.name)
+    paths, images = load_images(images_dir, max_width=1200)
+    if len(images) < 2:
+        return 1
 
-    if len(files) < 2:
-        print("Need at least 2 images in ai-panorama/images/")
-        return
+    print(f"\nLoaded {len(images)} image(s).")
 
-    # Try a couple scales: smaller can stitch more
-    for scale in (0.6, 0.5, 0.4):
-        print(f"\n--- Trying scale={scale} ---")
-        pano, used_files, status, info = try_sets(files, scale=scale)
-        if pano is not None:
-            cv.imwrite(str(out_path), pano)
-            print(f"Saved: {out_path}")
-            print(f"Stitched {len(used_files)} images ({info})")
-            print("Used:")
-            for f in used_files:
-                print(" ", f.name)
-            return
+    # Try PANORAMA first, then SCANS
+    pano = sequential_stitch(paths, images, cv.Stitcher_PANORAMA, "PANORAMA")
 
-    print("Stitch failed at all scales.")
-    print("If IMG_5837 won't connect, you're likely missing IMG_5838 (bridge image).")
+    if pano is None:
+        pano = sequential_stitch(paths, images, cv.Stitcher_SCANS, "SCANS")
+
+    if pano is None:
+        print("\nCould not stitch all 8 images together.")
+        print("This almost always means parallax (camera moved forward/sideways) or not enough overlap.")
+        print("Best fix: remove the problem image or retake photos with 30–50% overlap while rotating in place.")
+        return 1
+
+    # Add border (like the example) so the warped area is visible
+    pano = cv.copyMakeBorder(pano, 200, 200, 200, 200, cv.BORDER_CONSTANT, value=(0, 0, 0))
+
+    out_path = Path("ai-panorama.jpg")
+    cv.imwrite(str(out_path), pano)
+    print(f"\nSaved: {out_path}")
+    print("Panorama complete.")
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
